@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+
+# User-maintained data file for the network drive bridge — not code,
+# changes over time, never committed (see pipeline/network_drive_browser_app.py).
+pipeline/Contracts.xlsx
+*.xlsx
+*.sh
+
+sf_key_svc_advancedanalytics

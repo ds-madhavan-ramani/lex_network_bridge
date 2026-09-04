@@ -1,0 +1,11 @@
+name: lex_network_bridge
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - streamlit==1.50.0
+      - snowflake-connector-python>=3.12
+      - smbprotocol>=1.15.0
+      - cryptography>=42
