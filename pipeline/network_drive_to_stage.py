@@ -22,12 +22,22 @@ environment variables when neither st.secrets nor _snowflake is
 available, which is always the case for a script like this one running
 outside Snowflake/Streamlit entirely.
 
-IMPORTANT — this is a staging step only. It does not parse documents,
-compute hashes, or write RAW_DOCUMENTS rows — it only copies raw file
-bytes into a holding stage (NETWORK_DRIVE_INBOX_STAGE). Picking those
-files up from there into the app's normal ingest pipeline
-(AI_PARSE_DOCUMENT, hashing, CONTRACT_REGISTER linking) is a separate
-piece of work, not yet built.
+IMPORTANT — this is a staging step only. It does not parse documents or
+write RAW_DOCUMENTS rows — it only copies raw file bytes into a holding
+stage (NETWORK_DRIVE_INBOX_STAGE). Picking those files up from there into
+the app's normal ingest pipeline (AI_PARSE_DOCUMENT, contract linking,
+indexing, extraction) is done by lex_contracts_intel's
+python/ingestion/stage_pickup.py, on a schedule (see that repo's
+sql/04_stage_pickup_task.sql).
+
+Files are staged under a per-CW subfolder — @NETWORK_DRIVE_INBOX_STAGE/
+<CW_NUMBER>/<filename> — not flat at the stage root. This is what lets
+stage_pickup.py auto-link a picked-up file to its contract safely: the CW
+number comes from the folder a human explicitly searched/selected (here,
+or in the browser app), not a guess against the file's name or content —
+contract_linking.suggest_cw_number()'s own docstring is explicit that a
+wrong auto-guess is unacceptable for this app, so this only works because
+the CW is known with certainty at staging time, not inferred later.
 
 UNVERIFIED: written without a live SMB server, Snowflake account, or
 network drive to test against — treat this as a best-effort starting
@@ -99,6 +109,7 @@ it):
 
 import argparse
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -112,6 +123,18 @@ from utils.network_drive_client import list_files, download_file, NetworkDriveEr
 import snowflake.connector
 
 INBOX_STAGE = "MEDSCOMA.DATA_LEX.NETWORK_DRIVE_INBOX_STAGE"
+
+# Best-effort fallback for sync_all()/sync_selected(), which don't have a
+# definitive CW folder the way the browser app does (it already knows
+# exactly which CW folder it searched). Matches "CW14465", "CW-4567",
+# "CWR890123", etc. If a path matches none of this, the file is skipped
+# rather than staged under a guessed/blank folder — see _extract_cw().
+_CW_NUMBER_RE = re.compile(r"\bCWR?[\s\-]?(\d{3,8})(?!\d)", re.IGNORECASE)
+
+
+def _extract_cw(path: str) -> Optional[str]:
+    match = _CW_NUMBER_RE.search(path)
+    return f"CW{match.group(1)}" if match else None
 
 
 @dataclass
@@ -204,7 +227,11 @@ def sync_all(conn, drive: DriveConfig):
              if is_eligible_extension(i.name)]
     print(f"Found {len(items)} eligible file(s) under the configured path.")
     for item in items:
-        _stage_one(conn, drive, item.item_id, item.name)
+        cw = _extract_cw(item.path)
+        if not cw:
+            print(f"SKIPPED (no CW number found in path): {item.path}")
+            continue
+        _stage_one(conn, drive, item.item_id, item.name, cw)
 
 
 def sync_selected(conn, drive: DriveConfig, relative_paths: List[str]):
@@ -215,10 +242,14 @@ def sync_selected(conn, drive: DriveConfig, relative_paths: List[str]):
         if not is_eligible_extension(file_name):
             print(f"SKIPPED (not PDF/DOCX): {rel}")
             continue
-        _stage_one(conn, drive, item_path, file_name)
+        cw = _extract_cw(rel_clean)
+        if not cw:
+            print(f"SKIPPED (no CW number found in path): {rel}")
+            continue
+        _stage_one(conn, drive, item_path, file_name, cw)
 
 
-def _stage_one(conn, drive: DriveConfig, item_path: str, file_name: str):
+def _stage_one(conn, drive: DriveConfig, item_path: str, file_name: str, cw: str):
     try:
         raw_bytes = download_file(drive, item_path)
     except NetworkDriveError as e:
@@ -230,10 +261,12 @@ def _stage_one(conn, drive: DriveConfig, item_path: str, file_name: str):
         with open(local_path, "wb") as f:
             f.write(raw_bytes)
         cur = conn.cursor()
+        # Staged under a per-CW subfolder — see the module docstring for
+        # why this matters (safe auto-linking downstream, not just tidiness).
         cur.execute(
-            f"PUT 'file://{local_path}' @{INBOX_STAGE} AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
+            f"PUT 'file://{local_path}' @{INBOX_STAGE}/{cw}/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
         )
-        print(f"OK  staged {file_name}")
+        print(f"OK  staged {cw}/{file_name}")
 
 
 def main():

@@ -63,6 +63,13 @@ committed to the repo (it's data, not code — see `.gitignore`). Edit the
 file, then click **Reload Contracts.xlsx** in the app to pick up changes
 without restarting it.
 
+Files are staged under a **per-CW subfolder**, not flat —
+`@NETWORK_DRIVE_INBOX_STAGE/<CW_NUMBER>/<filename>`. The CW number comes
+from the folder actually searched (the browser app's `CW_Folder` column,
+or a best-effort regex on the path for the CLI's `--all`/`--files`) —
+never guessed at ingest time. This is what lets the pickup step (below)
+auto-link a file to its contract safely.
+
 **Verify what landed:**
 
 ```sql
@@ -70,5 +77,7 @@ LIST @MEDSCOMA.DATA_LEX.NETWORK_DRIVE_INBOX_STAGE;
 ```
 
 Staging only copies raw bytes into `NETWORK_DRIVE_INBOX_STAGE` — picking
-those files up into `RAW_DOCUMENTS` (parsing, hashing, contract linking)
-is a separate, not-yet-built step.
+those files up into `RAW_DOCUMENTS` (parsing, contract linking, indexing,
+extraction) is a scheduled Snowflake Task in the main `lex_contracts_intel`
+repo (`python/ingestion/stage_pickup.py`, `sql/04_stage_pickup_task.sql`),
+not part of this repo.

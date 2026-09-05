@@ -199,13 +199,19 @@ if items:
         "Select files to copy to the stage", options=labels, default=labels
     )
     if st.button("Copy selected files to stage"):
-        selected_items = [item for item, label in zip(items, labels) if label in selected_labels]
+        # Staged under a per-CW subfolder (@INBOX_STAGE/<CW>/<filename>) —
+        # the CW here is the folder this app actually searched, not a
+        # guess, which is what lets lex_contracts_intel's pickup step
+        # auto-link the file to its contract safely. See
+        # network_drive_to_stage.py's module docstring.
+        selected = [(item, r["CW_Folder"]) for item, r, label in zip(items, rows, labels)
+                    if label in selected_labels]
         progress = st.empty()
-        for item in selected_items:
-            progress.write(f"Staging {item.name}…")
-            _stage_one(conn, drive, item.item_id, item.name)
+        for item, cw in selected:
+            progress.write(f"Staging {cw}/{item.name}…")
+            _stage_one(conn, drive, item.item_id, item.name, cw)
         progress.write("Done.")
-        st.session_state["staged_just_now"] = [i.name for i in selected_items]
+        st.session_state["staged_just_now"] = [f"{cw}/{i.name}" for i, cw in selected]
         st.rerun()
 
 st.divider()
@@ -222,12 +228,18 @@ if "stage_listing_cache" not in st.session_state:
 staged_rows = st.session_state["stage_listing_cache"]
 just_staged = set(st.session_state.pop("staged_just_now", []))
 if staged_rows:
+    def _cw_and_file(name: str) -> str:
+        # name looks like "networkdriveinboxstage/CW14465/file.pdf" —
+        # the last two segments are the CW subfolder and the filename.
+        parts = name.split("/")
+        return "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+
     st.dataframe(
         [
             {
-                "File": row[0].rsplit("/", 1)[-1],
+                "CW / File": _cw_and_file(row[0]),
                 "Size (bytes)": row[1],
-                "Just copied": "✅" if row[0].rsplit("/", 1)[-1] in just_staged else "",
+                "Just copied": "✅" if _cw_and_file(row[0]) in just_staged else "",
             }
             for row in staged_rows
         ],
