@@ -75,6 +75,23 @@ def _contract_titles() -> dict:
     except Exception:
         return {}
 
+
+def _cw_summary(rows: list) -> list:
+    """Collapses the per-file `rows` list down to one row per CW_Folder —
+    CW_Folder and Contract Title only. The same title repeating across
+    every file in a CW folder is correct (one contract, one title), not a
+    bug, but listing it once per CW instead of once per file is a clearer
+    quick check that titles look right before picking files to stage —
+    file-level detail (filenames) is still available in the "Select files
+    to copy" list below, this table just isn't the place for it."""
+    seen: dict = {}
+    for r in rows:
+        cw = r["CW_Folder"]
+        if cw not in seen:
+            seen[cw] = {"CW_Folder": cw, "Contract Title": r["Contract Title"]}
+    return list(seen.values())
+
+
 st.set_page_config(page_title="LEX Network Drive Bridge", page_icon="📁", layout="wide")
 st.title("📁 LEX Network Drive Bridge")
 st.caption(
@@ -179,11 +196,11 @@ if st.button("List files of interest", type="primary", disabled=not cw_folders):
                 # everything is done — a folder with hundreds of nested
                 # subfolders can take a while to walk in full.
                 if len(items) % 3 == 0:
-                    table_placeholder.dataframe(rows, use_container_width=True, hide_index=True)
+                    table_placeholder.dataframe(_cw_summary(rows), use_container_width=True, hide_index=True)
         except NetworkDriveError as e:
             st.warning(f"{cw}: {e}")
 
-    table_placeholder.dataframe(rows, use_container_width=True, hide_index=True)
+    table_placeholder.dataframe(_cw_summary(rows), use_container_width=True, hide_index=True)
     status.write(f"Done — {len(items)} matching file(s) found across {len(cw_folders)} CW folder(s).")
     st.session_state["browser_items"] = items
     st.session_state["browser_rows"] = rows
