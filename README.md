@@ -41,6 +41,77 @@ SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY_PATH (or SNOWFLAKE_PASS
 NETWORK_DRIVE_USERNAME, NETWORK_DRIVE_PASSWORD
 ```
 
+## Network drive location config (NETWORK_DRIVE_HOST/SHARE/DEFAULT_PATH)
+
+`get_snowflake_connection()`'s caller — `load_drive_config()` in
+`network_drive_to_stage.py` — reads `NETWORK_DRIVE_HOST`,
+`NETWORK_DRIVE_SHARE`, and `NETWORK_DRIVE_DEFAULT_PATH` with a plain
+`SELECT` against `MEDSCOMA.APP_CATALOG.PROJECTS WHERE PROJECT_CODE =
+'LEX'`. These are **not environment variables** — deliberately: they live
+once in Snowflake so this repo and `lex_contracts_intel` (which owns that
+table) always agree on the same values, instead of every bridge host
+needing its own copy kept in sync. `bridge_env.sh` only sets
+`NETWORK_DRIVE_DOMAIN` as an optional override; the other three have no
+env var equivalent.
+
+**This means they don't survive a teardown/rebuild of `APP_CATALOG`.**
+Dropping and recreating that schema (e.g. re-running
+`lex_contracts_intel`'s `sql/00_setup_catalog.sql`, or a full
+teardown/reprovision of the LEX project) drops the `PROJECTS` table and
+the whole LEX row with it — not just these three columns. A plain restart
+of this repo's Streamlit app or CLI does **not** require redoing this;
+only a schema/table rebuild does.
+
+After such a rebuild, first redo `lex_contracts_intel`'s normal
+provisioning (recreate the LEX project row via `CREATE_PROJECT`), then
+set these three fields. If the `pipeline/00_provision_project.ipynb`
+notebook (in `lex_contracts_intel`) is available, use its "Set LEX's
+network drive location" cell — it binds values as parameters, which
+avoids a real gotcha: a raw SQL `UPDATE` with a literal path treats `\`
+as an escape character in single-quoted strings, silently dropping it
+(`AppData\prd\...` becomes `AppDataprd...`) unless every backslash is
+doubled.
+
+Without notebook access — e.g. running directly from this bridge host —
+the same bind-parameter safety is available via this repo's own
+Snowflake connection helper, run once after a rebuild:
+
+```bash
+python3 << 'EOF'
+import sys
+sys.path.insert(0, "pipeline")
+from network_drive_to_stage import get_snowflake_connection
+
+conn = get_snowflake_connection()
+cur = conn.cursor()
+
+cur.execute(
+    "SELECT NETWORK_DRIVE_HOST, NETWORK_DRIVE_SHARE, NETWORK_DRIVE_DEFAULT_PATH, "
+    "NETWORK_DRIVE_DOMAIN FROM MEDSCOMA.APP_CATALOG.PROJECTS WHERE PROJECT_CODE = 'LEX'"
+)
+print("Before:", cur.fetchone())
+
+# %s bind params -- immune to the backslash-literal-escaping gotcha above.
+cur.execute(
+    "UPDATE MEDSCOMA.APP_CATALOG.PROJECTS SET "
+    "NETWORK_DRIVE_HOST = %s, NETWORK_DRIVE_SHARE = %s, NETWORK_DRIVE_DEFAULT_PATH = %s "
+    "WHERE PROJECT_CODE = 'LEX'",
+    ("metrotrains.local", "apps$", "AppData\\prd\\MR5Documents\\Ariba"),
+)
+
+cur.execute(
+    "SELECT NETWORK_DRIVE_HOST, NETWORK_DRIVE_SHARE, NETWORK_DRIVE_DEFAULT_PATH, "
+    "NETWORK_DRIVE_DOMAIN FROM MEDSCOMA.APP_CATALOG.PROJECTS WHERE PROJECT_CODE = 'LEX'"
+)
+print("After:", cur.fetchone())
+conn.close()
+EOF
+```
+
+Run with `bridge_env.sh` already sourced (reuses its Snowflake
+credentials). Then restart this repo's Streamlit app / re-run the CLI —
+no other config needed.
+
 ## Usage
 
 **CLI** — sync specific files or everything eligible:
