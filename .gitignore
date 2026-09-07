@@ -8,3 +8,4 @@ pipeline/Contracts.xlsx
 *.sh
 
 sf_key_svc_advancedanalytics
+deleted_app_catalog.py
