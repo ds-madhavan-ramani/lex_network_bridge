@@ -12,6 +12,7 @@ Contract Lookup page has a fixed, known set of contract numbers to offer,
 independent of ingestion order.
 """
 
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -54,6 +55,19 @@ ELIGIBLE_EXTENSIONS = (".pdf", ".docx")
 SIGNED_MARKERS = ("signed", "executed", "execution copy", "duly executed",
                   "fully executed", "execution version")
 
+# Plain "marker in haystack" substring matching (the original approach) let
+# "Unsigned"/"Unexecuted" false-positive on the "signed"/"executed" markers,
+# since "unsigned" literally contains "signed". Filenames delimit words with
+# underscores, hyphens and spaces rather than always inserting a true
+# regex \b word boundary (e.g. "CW20841_Executed.pdf" has no space around
+# "Executed"), so the fix isn't \b — it's rejecting a match only when it is
+# directly glued to another *letter* on either side (a real prefix/suffix
+# like "un" or "re"), while still allowing "_", "-", ".", digits and string
+# start/end as valid separators either side of a marker.
+_SIGNED_MARKER_PATTERN = re.compile(
+    r"(?<![a-z])(?:" + "|".join(re.escape(m) for m in SIGNED_MARKERS) + r")(?![a-z])"
+)
+
 
 def is_eligible_extension(file_name: str) -> bool:
     return file_name.lower().endswith(ELIGIBLE_EXTENSIONS)
@@ -61,10 +75,11 @@ def is_eligible_extension(file_name: str) -> bool:
 
 def looks_signed(file_name: str, text_sample: str = "") -> bool:
     """True if the file name OR the first part of its parsed text contains
-    one of SIGNED_MARKERS. A False here is a prompt for a human to double
-    check, not a rejection — see the module docstring."""
+    one of SIGNED_MARKERS as a whole word (not as a substring of a longer
+    word like "unsigned" or "unexecuted"). A False here is a prompt for a
+    human to double check, not a rejection — see the module docstring."""
     haystack = f"{file_name}\n{text_sample[:3000]}".lower()
-    return any(marker in haystack for marker in SIGNED_MARKERS)
+    return bool(_SIGNED_MARKER_PATTERN.search(haystack))
 
 
 @dataclass

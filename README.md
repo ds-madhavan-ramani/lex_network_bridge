@@ -134,6 +134,26 @@ committed to the repo (it's data, not code — see `.gitignore`). Edit the
 file, then click **Reload Contracts.xlsx** in the app to pick up changes
 without restarting it.
 
+By default the UI only lists files that look **signed/executed** (matched
+against `python/required_contracts.py`'s `SIGNED_MARKERS` — "signed",
+"executed", "execution copy", "duly executed", "fully executed",
+"execution version" — checked against the file name). This match is
+whole-word: `"Unsigned"`/`"Unexecuted"` will **not** match just because
+they contain "signed"/"executed" as a substring (fixed — the original
+substring check did false-positive on those). Check **"Show all PDFs in
+these folders"** to bypass the filter entirely and see every PDF,
+signed-looking or not.
+
+Once a search has listed files, use **"Preview a file"** to open any of
+them directly from the network drive — no staging or ingestion required
+first. It downloads the file, offers a **Download this file** button, and
+for PDFs renders an inline preview (skipped above ~20MB — download still
+works, the PDF is just too large to embed inline in the browser). This is
+the fastest way to confirm whether a file that keeps failing to
+ingest/index downstream (e.g. `"Parsed text too short"` in
+`lex_contracts_intel`) is genuinely blank/corrupt/partial, or whether the
+problem lies elsewhere — without needing SQL or Snowflake access at all.
+
 Files are staged under a **per-CW subfolder**, not flat —
 `@NETWORK_DRIVE_INBOX_STAGE/<CW_NUMBER>/<filename>`. The CW number comes
 from the folder actually searched (the browser app's `CW_Folder` column,

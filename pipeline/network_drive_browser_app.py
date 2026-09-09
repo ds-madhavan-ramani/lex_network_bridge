@@ -20,6 +20,7 @@ UNVERIFIED: written without a live SMB server or Snowflake account to test
 against — treat this as a best-effort starting point.
 """
 
+import base64
 import os
 import sys
 
@@ -28,8 +29,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 import streamlit as st
 
 from required_contracts import looks_signed  # noqa: E402
-from utils.network_drive_client import iter_files, NetworkDriveError  # noqa: E402
+from utils.network_drive_client import iter_files, download_file, NetworkDriveError  # noqa: E402
 from ingestion.xlsx_parser import extract_column_values  # noqa: E402
+
+# Above this, an inline <embed> preview is skipped (download still offered)
+# — a data: URI inflates the file ~33% and the browser has to hold the
+# whole thing in memory alongside Streamlit's own copy; contract PDFs are
+# occasionally large scanned bundles (hundreds of pages), so this caps
+# what's attempted inline rather than risking the tab hanging or crashing.
+_INLINE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024
 
 from network_drive_to_stage import (  # noqa: E402
     INBOX_STAGE,
@@ -230,6 +238,69 @@ if items:
         progress.write("Done.")
         st.session_state["staged_just_now"] = [f"{cw}/{i.name}" for i, cw in selected]
         st.rerun()
+
+    st.divider()
+    st.subheader("Preview a file")
+    st.caption(
+        "Open a listed file directly from the network drive — no need to "
+        "stage or ingest it first. Use this to spot-check a file that looks "
+        "partial, blank, or corrupt before deciding whether to copy it."
+    )
+    preview_choice = st.selectbox(
+        "File to preview", options=["(choose a file)"] + labels, key="preview_choice"
+    )
+    st.session_state.setdefault("preview_item_id", None)
+    st.session_state.setdefault("preview_bytes", None)
+    st.session_state.setdefault("preview_error", None)
+
+    if preview_choice != "(choose a file)":
+        preview_item = items[labels.index(preview_choice)]
+        if st.button("Load preview", key="load_preview_btn"):
+            with st.spinner(f"Downloading {preview_item.name}…"):
+                try:
+                    st.session_state["preview_bytes"] = download_file(drive, preview_item.item_id)
+                    st.session_state["preview_error"] = None
+                except NetworkDriveError as e:
+                    st.session_state["preview_bytes"] = None
+                    st.session_state["preview_error"] = str(e)
+                st.session_state["preview_item_id"] = preview_item.item_id
+
+        # Only show a result if it actually belongs to the file currently
+        # selected in the dropdown — otherwise switching the selectbox would
+        # keep showing the previous file's preview until "Load preview" is
+        # clicked again, which reads as "the wrong file is being shown".
+        if st.session_state["preview_item_id"] == preview_item.item_id:
+            if st.session_state["preview_error"]:
+                st.error(f"Could not download {preview_item.name}: {st.session_state['preview_error']}")
+            elif st.session_state["preview_bytes"] is not None:
+                data = st.session_state["preview_bytes"]
+                is_pdf = preview_item.name.lower().endswith(".pdf")
+                st.download_button(
+                    "Download this file",
+                    data=data,
+                    file_name=preview_item.name,
+                    mime="application/pdf" if is_pdf else
+                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="preview_download_btn",
+                )
+                st.caption(f"{len(data):,} bytes downloaded from the network drive.")
+                if not is_pdf:
+                    st.info(
+                        "Inline preview only renders PDFs — this is a DOCX file. "
+                        "Download it above to open locally."
+                    )
+                elif len(data) > _INLINE_PREVIEW_MAX_BYTES:
+                    st.info(
+                        f"This PDF is {len(data):,} bytes — too large for an inline "
+                        "preview here. Download it above to open locally."
+                    )
+                else:
+                    b64 = base64.b64encode(data).decode("ascii")
+                    st.markdown(
+                        f'<embed src="data:application/pdf;base64,{b64}" '
+                        'width="100%" height="700" type="application/pdf" />',
+                        unsafe_allow_html=True,
+                    )
 
 st.divider()
 st.subheader("Stage folder contents")
